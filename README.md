@@ -144,7 +144,21 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-## Requirements
+## Agreed with the customer
 
-- [REQUIREMENTS.md](REQUIREMENTS.md) — what was agreed with the customer and why.
-- [docs/dialog.md](docs/dialog.md) — the full conversation.
+*Customer* — said by Мишка-шкряботушка; *approved* — proposed by me, she agreed.
+
+- Animals upload documents with advice; others ask plain-text questions; the answer always names its source. All users are equal, no admins. *(customer)*
+- Ukrainian, simple and friendly. The main goal: never mix up advice and sources. *(customer)*
+- Formats: PDF, Word (.docx), .txt; no photos. Up to 20 MB, a bigger file → ask for a smaller one. *(customer / approved)*
+- One shared base for the whole forest; private chats only. *(customer)*
+- Places: 3 forest parts and 8 mittens from a fixed map; each document belongs to one place; unclear place → ask the uploader. *(customer)*
+- Priority: mitten → its forest part → whole forest; general advice only if it does not contradict. *(customer)*
+- No place in the question → whole-forest advice plus a reminder; unclear place → ask, never guess. *(approved)*
+- Під вербою: if the two parts disagree, show both with sources and warn. *(approved)*
+- Same file twice → stored once. New version → the old one stops working; separate document → both work; the uploader chooses with a button. *(customer / approved)*
+- Anyone may update a document, including the archive ones; the old version is kept as replaced. Only the author may delete. *(customer / approved)*
+- «Погоджуюсь» before anything: documents are public, no personal data, the uploader's name and date are shown. *(approved)*
+- Source: the document, its place, and for uploaded ones who sent it and when. *(customer)*
+- Not found → say so honestly; errors → «спробуй ще раз за хвилинку». *(approved)*
+- «Лісовий архів» from Google Drive must be known from the very start. *(customer)*
