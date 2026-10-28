@@ -1,0 +1,11 @@
+# Store text files with LF so they work inside the Linux container
+* text=auto eol=lf
+
+# Documents are binary, never touch their line endings
+*.pdf binary
+*.docx binary
+*.jpg binary
+*.png binary
+
+# Original archive texts must stay byte-exact: their hash detects re-uploads of the same file
+data/archive/*.txt -text

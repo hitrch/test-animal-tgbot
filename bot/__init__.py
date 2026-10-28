@@ -1,0 +1,1 @@
+"""Forest advice Telegram bot."""

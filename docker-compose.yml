@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: forest
+      POSTGRES_PASSWORD: forest
+      POSTGRES_DB: forest
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forest -d forest"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://forest:forest@db:5432/forest
+    depends_on:
+      db:
+        # Wait until Postgres accepts connections, not just until it starts
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db_data:

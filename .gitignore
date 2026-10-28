@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# AI assistant files
+CLAUDE.md
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+
+# IDE
+.idea/
