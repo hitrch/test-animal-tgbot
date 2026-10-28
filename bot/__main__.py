@@ -7,7 +7,8 @@ from aiogram import Bot, Dispatcher
 from bot.archive import load_archive
 from bot.config import load_config
 from bot.db import init_schema
-from bot.handlers import consent
+from bot.handlers import consent, questions
+from bot.llm import LLM
 from bot.middlewares import AccessMiddleware
 
 logger = logging.getLogger(__name__)
@@ -26,11 +27,14 @@ async def main() -> None:
 
     bot = Bot(config.telegram_token)
     dp = Dispatcher()
-    # Every handler that has a "pool" parameter gets the database pool automatically
+    # Every handler that has a "pool" or "llm" parameter gets these objects automatically
     dp["pool"] = pool
+    dp["llm"] = LLM(config.groq_api_key, config.parse_model, config.answer_model)
     # Outer middleware runs for every message, even if no handler matches it
     dp.message.outer_middleware(AccessMiddleware())
     dp.include_router(consent.router)
+    # "Any text" handler goes last, after all more specific handlers
+    dp.include_router(questions.router)
 
     try:
         logger.info("Bot started")

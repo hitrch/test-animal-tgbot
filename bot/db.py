@@ -19,6 +19,37 @@ async def add_consent(pool: asyncpg.Pool, user_id: int) -> None:
     await pool.execute("INSERT INTO consents (user_id) VALUES ($1) ON CONFLICT DO NOTHING", user_id)
 
 
+async def find_documents(pool: asyncpg.Pool, places: list[str], topics: list[str]) -> list[asyncpg.Record]:
+    """Active documents for the given places that share at least one topic with the question.
+
+    With no topics, all active documents of these places are returned.
+    Results are ordered like `places`: the most specific place first.
+    """
+    return await pool.fetch(
+        """
+        SELECT id, title, place, topics, content, archive_path, uploader_name, uploaded_at
+        FROM documents
+        WHERE is_active
+          AND place = ANY($1)
+          AND (cardinality($2::text[]) = 0 OR topics && $2)
+        ORDER BY array_position($1, place), id
+        """,
+        places, topics,
+    )
+
+
+async def places_with_documents(pool: asyncpg.Pool, topics: list[str]) -> list[str]:
+    """Places that have active documents on these topics (any topic if the list is empty)."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT place FROM documents
+        WHERE is_active AND (cardinality($1::text[]) = 0 OR topics && $1)
+        """,
+        topics,
+    )
+    return [row["place"] for row in rows]
+
+
 async def document_exists(pool: asyncpg.Pool, file_hash: str) -> bool:
     return await pool.fetchval("SELECT EXISTS(SELECT 1 FROM documents WHERE file_hash = $1)", file_hash)
 
