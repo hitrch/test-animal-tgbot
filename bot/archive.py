@@ -7,6 +7,7 @@ from pathlib import Path
 
 import asyncpg
 
+from bot.chunks import Chunk, split_text
 from bot.db import add_document, document_exists
 from bot.extract import extract_text
 from bot.places import ALL_PLACES
@@ -56,12 +57,13 @@ async def load_archive(pool: asyncpg.Pool, archive_dir: Path = ARCHIVE_DIR) -> N
 
         # Text extraction (OCR for scans) is slow and blocking, so run it in a separate thread
         content = await asyncio.to_thread(_read_archive_text, archive_dir, name, data)
+        # The manifest tags the whole document, so every part gets the same topics
+        chunks = [Chunk(content=part, topics=topics) for part in split_text(content)]
         await add_document(
             pool,
             title=Path(name).stem,
             place=place,
-            topics=topics,
-            content=content,
+            chunks=chunks,
             file_hash=file_hash,
             archive_path=name,
         )

@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 # Returned as the place when the question names a place we cannot map to the forest map
 UNKNOWN_PLACE = "unknown"
+# Returned as the place when a document part has advice for several places
+MIXED_PLACES = "mixed"
+
+# A long document is parsed part by part, and Groq allows 8K tokens per minute:
+# on a 429 error the SDK waits as long as the "retry-after" header says and tries again
+UPLOAD_MAX_RETRIES = 10
 
 
 class LLMUnavailableError(Exception):
@@ -34,13 +40,25 @@ class Answer:
     parts_differ: bool  # the answer shows different advice of two forest parts (Під вербою)
 
 
+@dataclass(frozen=True)
+class ParsedChunk:
+    place: str | None  # one of ALL_PLACES, MIXED_PLACES, or None if the part does not say
+    topics: list[str]
+
+
+# Shared by the question and the document prompts
+PLACES_TEXT = """- "весь ліс" — весь ліс загалом;
+- "хвойний", "листяний", "біля річки" — частини лісу ("у хвойному лісі", "біля річки");
+- рукавички: "Під ялиною", "У соснах", "Біля мурашника", "Під дубом", "У ліщині", "Під вербою",
+  "Біля бобрової греблі", "На узліссі"."""
+
+TOPICS_TEXT = "\n".join(f"- {name}: {description}" for name, description in TOPICS.items())
+
+
 PARSE_PROMPT = f"""Ти розбираєш питання звірів про ліс. Визнач місце, про яке питають, і теми питання.
 
 Місця (рівно одне з цього списку):
-- "весь ліс" — якщо питають про весь ліс загалом;
-- "хвойний", "листяний", "біля річки" — частини лісу ("у хвойному лісі", "біля річки");
-- рукавички: "Під ялиною", "У соснах", "Біля мурашника", "Під дубом", "У ліщині", "Під вербою",
-  "Біля бобрової греблі", "На узліссі".
+{PLACES_TEXT}
 Підказки: "біля сосон" → "У соснах"; "під дубом", "біля дуба" → "Під дубом"; "біля ліщини" → "У ліщині";
 "біля верби" → "Під вербою"; "біля греблі" → "Біля бобрової греблі"; "біля поля" → "На узліссі".
 "біля ялини" неоднозначне (є "Під ялиною" і "Біля мурашника" під сухою ялиною) → "{UNKNOWN_PLACE}".
@@ -50,9 +68,28 @@ PARSE_PROMPT = f"""Ти розбираєш питання звірів про л
 Якщо місце взагалі не назване → null.
 
 Теми (одна або кілька з цього списку, назва — до двокрапки):
-{chr(10).join(f"- {name}: {description}" for name, description in TOPICS.items())}
+{TOPICS_TEXT}
 
 Відповідай лише JSON: {{"place": <місце, "{UNKNOWN_PLACE}" або null>, "topics": [<теми>], "options": [<місця>]}}"""
+
+
+CHUNK_PROMPT = f"""Ти розбираєш частину документа з порадами для звірів лісу. Визнач, для якого місця ці поради, і теми.
+
+Місце — для кого написані поради, а не які місця в тексті згадуються.
+Наприклад, «Стежки від рукавички Під дубом» згадують ліщину й вербу, але місце — "Під дубом".
+Зазвичай місце видно з назви документа, заголовка чи вступу: «Для мешканців листяного лісу», «рукавичка «Під дубом»».
+
+Місця (рівно одне з цього списку):
+{PLACES_TEXT}
+Якщо в цій частині є окремі поради для різних місць (наприклад, розділи для двох рукавичок
+або для рукавички й усього лісу) → "{MIXED_PLACES}".
+Якщо з назви документа й цієї частини не видно, для кого поради → null. Не вгадуй.
+Якщо це не перша частина і в ній не сказано, для кого поради, → null: місце названо на початку документа.
+
+Теми (одна або кілька з цього списку, назва — до двокрапки):
+{TOPICS_TEXT}
+
+Відповідай лише JSON: {{"place": <місце, "{MIXED_PLACES}" або null>, "topics": [<теми>]}}"""
 
 
 ANSWER_PROMPT = """Ти — лісовий порадник. Відповідаєш звірам українською, просто, доброзичливо й коротко.
@@ -88,6 +125,19 @@ class LLM:
         topics = [topic for topic in data.get("topics", []) if topic in TOPICS]
         options = [option for option in data.get("options", []) if option in ALL_PLACES]
         return ParsedQuestion(place=place, topics=topics, options=options)
+
+    async def parse_chunk(self, title: str, number: int, total: int, text: str) -> ParsedChunk:
+        """Place and topics of one part of an uploaded document. number counts from 1."""
+        user = f"Документ «{title}», частина {number} з {total}:\n\n{text}"
+        data = await self._ask_json(self._parse_model, CHUNK_PROMPT, user, max_retries=UPLOAD_MAX_RETRIES)
+
+        place = data.get("place")
+        # A place outside the list is as good as no place: the bot will ask the uploader
+        if place not in ALL_PLACES and place != MIXED_PLACES:
+            place = None
+        # Every part needs a topic, otherwise the search would never find it
+        topics = [topic for topic in data.get("topics", []) if topic in TOPICS] or ["інше"]
+        return ParsedChunk(place=place, topics=topics)
 
     async def answer_question(
         self,
@@ -126,9 +176,11 @@ class LLM:
             parts_differ=data.get("conflict") is True,
         )
 
-    async def _ask_json(self, model: str, system: str, user: str) -> dict:
+    async def _ask_json(self, model: str, system: str, user: str, max_retries: int = 2) -> dict:
         try:
-            response = await self._client.chat.completions.create(
+            # with_options makes a copy of the client with other settings; 2 retries is the SDK default
+            client = self._client.with_options(max_retries=max_retries)
+            response = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 response_format={"type": "json_object"},

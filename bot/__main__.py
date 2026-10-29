@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher
 from bot.archive import load_archive
 from bot.config import load_config
 from bot.db import init_schema
-from bot.handlers import consent, questions
+from bot.handlers import consent, documents, questions
 from bot.llm import LLM
 from bot.middlewares import AccessMiddleware
 
@@ -26,6 +26,7 @@ async def main() -> None:
     await load_archive(pool)
 
     bot = Bot(config.telegram_token)
+    # FSM data (an upload waiting for a button) is kept in memory by default (MemoryStorage)
     dp = Dispatcher()
     # Every handler that has a "pool" or "llm" parameter gets these objects automatically
     dp["pool"] = pool
@@ -33,6 +34,7 @@ async def main() -> None:
     # Outer middleware runs for every message, even if no handler matches it
     dp.message.outer_middleware(AccessMiddleware())
     dp.include_router(consent.router)
+    dp.include_router(documents.router)
     # "Any text" handler goes last, after all more specific handlers
     dp.include_router(questions.router)
 

@@ -5,7 +5,8 @@ from datetime import date
 import asyncpg
 
 from bot import texts
-from bot.db import find_documents, places_with_documents
+from bot.chunks import select_chunks
+from bot.db import fetch_chunks, find_documents, places_with_documents
 from bot.llm import LLM, UNKNOWN_PLACE, LLMUnavailableError
 from bot.places import ALL_PLACES, WHOLE_FOREST, place_chain
 
@@ -26,7 +27,9 @@ async def answer_question(question: str, pool: asyncpg.Pool, llm: LLM, today: da
             documents = await find_documents(pool, [WHOLE_FOREST], parsed.topics)
             if not documents:
                 return await _ask_place(pool, parsed.topics)
-            answer, found = await _answer_from_documents(question, [WHOLE_FOREST], documents, llm, today)
+            answer, found = await _answer_from_documents(
+                question, [WHOLE_FOREST], documents, parsed.topics, pool, llm, today
+            )
             # The reminder about local rules only makes sense next to real advice
             return f"{answer}\n\n{texts.LOCAL_RULES_NOTE}" if found else answer
 
@@ -34,7 +37,7 @@ async def answer_question(question: str, pool: asyncpg.Pool, llm: LLM, today: da
         documents = await find_documents(pool, chain, parsed.topics)
         if not documents:
             return texts.NOT_FOUND
-        answer, _ = await _answer_from_documents(question, chain, documents, llm, today)
+        answer, _ = await _answer_from_documents(question, chain, documents, parsed.topics, pool, llm, today)
         return answer
 
     except LLMUnavailableError:
@@ -42,9 +45,21 @@ async def answer_question(question: str, pool: asyncpg.Pool, llm: LLM, today: da
 
 
 async def _answer_from_documents(
-    question: str, chain: list[str], documents: Sequence[Mapping], llm: LLM, today: date
+    question: str,
+    chain: list[str],
+    found_documents: Sequence[Mapping],
+    topics: list[str],
+    pool: asyncpg.Pool,
+    llm: LLM,
+    today: date,
 ) -> tuple[str, bool]:
     """Return the reply text and whether the answer was found in the documents."""
+    # Only the parts on the question's topics go to the LLM, within the token budget
+    chunks = await fetch_chunks(pool, [document["id"] for document in found_documents])
+    documents = select_chunks(found_documents, chunks, chain, question, topics)
+    if not documents:
+        return texts.NOT_FOUND, False
+
     answer = await llm.answer_question(question, chain, documents, today)
     # No documents used means the answer is not in them: never show a source then
     if not answer.used_documents:
