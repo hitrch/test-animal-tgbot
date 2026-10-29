@@ -20,6 +20,8 @@ MIXED_PLACES = "mixed"
 # A long document is parsed part by part, and Groq allows 8K tokens per minute:
 # on a 429 error the SDK waits as long as the "retry-after" header says and tries again
 UPLOAD_MAX_RETRIES = 10
+# Tries when the model writes invalid JSON (see _ask_json)
+JSON_ATTEMPTS = 2
 
 
 class LLMUnavailableError(Exception):
@@ -93,6 +95,7 @@ CHUNK_PROMPT = f"""Ти розбираєш частину документа з 
 
 
 ANSWER_PROMPT = """Ти — лісовий порадник. Відповідаєш звірам українською, просто, доброзичливо й коротко.
+Звертайся до звіра на «ти» («спитай Їжака», а не «спитайте»).
 
 Правила:
 1. Відповідай ЛИШЕ за наданими документами. Нічого не вигадуй і не додавай від себе.
@@ -177,16 +180,36 @@ class LLM:
         )
 
     async def _ask_json(self, model: str, system: str, user: str, max_retries: int = 2) -> dict:
-        try:
-            # with_options makes a copy of the client with other settings; 2 retries is the SDK default
-            client = self._client.with_options(max_retries=max_retries)
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                response_format={"type": "json_object"},
-                reasoning_effort="low",
-            )
-            return json.loads(response.choices[0].message.content)
-        except (groq.APIError, json.JSONDecodeError) as error:
-            logger.warning("Groq request to %s failed: %r", model, error)
-            raise LLMUnavailableError from error
+        # gpt-oss sometimes writes broken JSON and Groq rejects it with "json_validate_failed";
+        # the next try almost always works, so the user does not have to ask again
+        for attempt in range(1, JSON_ATTEMPTS + 1):
+            try:
+                return await self._ask_json_once(model, system, user, max_retries)
+            except groq.BadRequestError as error:
+                if _is_broken_json(error) and attempt < JSON_ATTEMPTS:
+                    logger.info("Groq: %s wrote broken JSON, trying again", model)
+                    continue
+                logger.warning("Groq request to %s failed: %r", model, error)
+                raise LLMUnavailableError from error
+            except (groq.APIError, json.JSONDecodeError) as error:
+                logger.warning("Groq request to %s failed: %r", model, error)
+                raise LLMUnavailableError from error
+
+    async def _ask_json_once(self, model: str, system: str, user: str, max_retries: int) -> dict:
+        # with_options makes a copy of the client with other settings; 2 retries is the SDK default
+        client = self._client.with_options(max_retries=max_retries)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            response_format={"type": "json_object"},
+            reasoning_effort="low",
+        )
+        return json.loads(response.choices[0].message.content)
+
+
+def _is_broken_json(error: groq.BadRequestError) -> bool:
+    """Groq's answer when the model's JSON is invalid: {"error": {"code": "json_validate_failed", ...}}."""
+    if not isinstance(error.body, dict):
+        return False
+    details = error.body.get("error")
+    return isinstance(details, dict) and details.get("code") == "json_validate_failed"

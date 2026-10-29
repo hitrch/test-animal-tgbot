@@ -16,6 +16,13 @@ CHUNK_SIZE = 3000
 # so two questions still fit into one minute of the 8K limit
 ANSWER_BUDGET = 6000
 
+# Beginnings of question words that say nothing about the advice ("коли", "скільки", "можна"...):
+# without this list "коли" would match almost every part
+STOP_STEMS = {
+    "коли", "скіл", "можн", "треб", "роби", "який", "якої", "якщо", "чому", "дуже",
+    "куди", "звід", "потр", "буде", "бути", "мені", "тобі", "тому", "щоби",
+}
+
 
 @dataclass
 class Chunk:
@@ -64,20 +71,25 @@ def select_chunks(
     question: str,
     topics: Sequence[str],
     budget: int = ANSWER_BUDGET,
+    require_shared_words: bool = False,
 ) -> list[dict]:
     """Choose the parts that fit into the budget and glue them back into documents.
 
     documents: rows with "id" and "place"; chunks: rows with "document_id", "position", "content", "topics".
-    Returns copies of the documents with "content" made of the chosen parts, in the original order.
-    Documents without chosen parts are left out.
+    require_shared_words: leave out parts without a single word of the question (used when there is
+    no topic filter, otherwise random parts would fill the budget).
+    Returns copies of the documents with "content" made of the chosen parts and "positions" of these
+    parts, in the original order. Documents without chosen parts are left out.
     """
     place_of = {document["id"]: document["place"] for document in documents}
-    question_words = _stems(question)
+    question_words = _stems(question) - STOP_STEMS
 
     candidates = [
         chunk for chunk in chunks
         if chunk["document_id"] in place_of and (not topics or set(chunk["topics"]) & set(topics))
     ]
+    if require_shared_words:
+        candidates = [chunk for chunk in candidates if question_words & _stems(chunk["content"])]
     # The most specific place first; within a place, parts sharing more words with the question
     candidates.sort(key=lambda chunk: (
         chain.index(place_of[chunk["document_id"]]),
@@ -97,7 +109,11 @@ def select_chunks(
     for document in documents:
         parts = sorted((c for c in chosen if c["document_id"] == document["id"]), key=lambda c: c["position"])
         if parts:
-            result.append({**document, "content": "\n\n".join(part["content"] for part in parts)})
+            result.append({
+                **document,
+                "content": "\n\n".join(part["content"] for part in parts),
+                "positions": [part["position"] for part in parts],
+            })
     return result
 
 
