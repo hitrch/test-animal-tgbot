@@ -81,6 +81,60 @@ async def places_with_documents(pool: asyncpg.Pool, topics: list[str]) -> list[s
     return [row["place"] for row in rows]
 
 
+async def user_documents(pool: asyncpg.Pool, user_id: int) -> list[asyncpg.Record]:
+    """Documents uploaded by the user, newest first, with the title of the newer version if replaced."""
+    # The table is joined with itself: "newer" is the document that replaced this one (if any)
+    return await pool.fetch(
+        """
+        SELECT d.id, d.title, d.place, d.uploaded_at, d.is_active, newer.title AS replaced_by_title
+        FROM documents d
+        LEFT JOIN documents newer ON newer.id = d.replaced_by
+        WHERE d.uploader_id = $1
+        ORDER BY d.uploaded_at DESC
+        """,
+        user_id,
+    )
+
+
+async def get_own_document(pool: asyncpg.Pool, document_id: int, user_id: int) -> asyncpg.Record | None:
+    """The document if this user uploaded it; None for other users' and archive documents."""
+    return await pool.fetchrow(
+        "SELECT id, title FROM documents WHERE id = $1 AND uploader_id = $2",
+        document_id, user_id,
+    )
+
+
+async def delete_document(pool: asyncpg.Pool, document_id: int, user_id: int) -> tuple[bool, str | None]:
+    """Delete the user's own document. Return (deleted, title of the old version that works again).
+
+    The old version this document replaced takes its place: it works again if this document was
+    active, or it is now replaced by whatever replaced this document.
+    """
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            # FOR UPDATE locks the row: two quick presses of the button cannot delete it twice
+            document = await connection.fetchrow(
+                "SELECT replaced_by FROM documents WHERE id = $1 AND uploader_id = $2 FOR UPDATE",
+                document_id, user_id,
+            )
+            if document is None:
+                return False, None
+
+            newer_id = document["replaced_by"]
+            restored_title = await connection.fetchval(
+                """
+                UPDATE documents SET replaced_by = $2, is_active = ($2::integer IS NULL)
+                WHERE replaced_by = $1
+                RETURNING title
+                """,
+                document_id, newer_id,
+            )
+            await connection.execute("DELETE FROM documents WHERE id = $1", document_id)
+
+    # The old version works again only if the deleted document was not replaced itself
+    return True, restored_title if newer_id is None else None
+
+
 async def document_exists(pool: asyncpg.Pool, file_hash: str) -> bool:
     return await pool.fetchval("SELECT EXISTS(SELECT 1 FROM documents WHERE file_hash = $1)", file_hash)
 

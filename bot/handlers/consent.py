@@ -1,7 +1,7 @@
-"""/start and the "Погоджуюсь" button."""
+"""/start, /help and the "Погоджуюсь" button."""
 import asyncpg
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot import texts
@@ -23,6 +23,11 @@ async def start(message: Message, pool: asyncpg.Pool) -> None:
         await message.answer(texts.HOW_TO_USE)
     else:
         await message.answer(texts.CONSENT_REQUEST, reply_markup=consent_keyboard())
+
+
+@router.message(Command("help"))
+async def help_command(message: Message) -> None:
+    await message.answer(texts.HELP)
 
 
 @router.callback_query(F.data == CONSENT_CALLBACK)
