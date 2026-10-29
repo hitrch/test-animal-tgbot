@@ -7,7 +7,6 @@ from aiogram.types import Message
 
 from bot import texts
 from bot.db import has_consent
-from bot.handlers.consent import consent_keyboard
 
 Handler = Callable[[Message, dict[str, Any]], Awaitable[Any]]
 
@@ -25,8 +24,8 @@ class AccessMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         if not await has_consent(data["pool"], event.from_user.id):
+            # A short reminder only: a new button on every message would leave many old buttons
             await event.answer(texts.CONSENT_REQUIRED)
-            await event.answer(texts.CONSENT_REQUEST, reply_markup=consent_keyboard())
             return None
 
         return await handler(event, data)
